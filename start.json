@@ -1,0 +1,11 @@
+{
+  "apps": [
+    {
+      "name": "MilitaryCoach",
+      "script": "npx",
+      "interpreter": "none",
+      "args": "npm run start:prod"
+    }
+  ]
+}
+
