@@ -9,3 +9,4 @@ export const validationSchema = Joi.object({
     CUSTOM: Joi.string().default('custom'),
     // OPEN_AI_SK: Joi.string().required(),
 });
+#ewoifj 
