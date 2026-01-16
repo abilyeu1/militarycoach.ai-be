@@ -1,0 +1,60 @@
+{
+  "family": "militarycoach-backend-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "arn:aws:iam::544382106129:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::544382106129:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "militarycoach-backend",
+      "image": "544382106129.dkr.ecr.us-east-1.amazonaws.com/militarycoach-backend:latest",
+      "portMappings": [
+        {
+          "containerPort": 3100,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "PORT",
+          "value": "3100"
+        },
+        {
+          "name": "MONGO_CONNECTION",
+          "value": "mongodb+srv://ajbilyeu15_db_user:kvcZrNeOlreg4pTv@cluster0.v9hbykj.mongodb.net/militarycoach?retryWrites=true&w=majority&appName=Cluster0"
+        },
+        {
+          "name": "JWT_SECRET",
+          "value": "prod-jwt-secret-key-change-this-immediately-for-security"
+        },
+        {
+          "name": "JWT_EXPIRY",
+          "value": "2592000"
+        },
+        {
+          "name": "OPEN_AI_SK",
+          "value": "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"
+        },
+        {
+          "name": "OPEN_AI_MODEL",
+          "value": "gpt-4o-mini"
+        },
+        {
+          "name": "STRIPE_SECRET_KEY",
+          "value": "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"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/militarycoach-backend",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "essential": true
+    }
+  ]
+}
