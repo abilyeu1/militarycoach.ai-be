@@ -38,6 +38,7 @@ import { CareerWizardDTO } from './DTO/careerWizard.dto';
 import { CoverLetterWizardDTO } from './DTO/coverLetterWizard.dto';
 import { MockInterviewDTO } from './DTO/mockInterview.dto';
 import { SkillsGapAnalysisDTO } from './DTO/skillsGapAnalysis.dto';
+import { ParseCvDto } from './DTO/parseCV.dto';
 
 @Controller('openai')
 @ApiTags('Open AI')
@@ -173,13 +174,15 @@ export class OpenaiController {
   @UseInterceptors(FileInterceptor('file'))
   @ApiConsumes('multipart/form-data')
   @ApiBody({
-    description: 'Upload your file here',
-    type: FileUploadDto,
+    description: 'Upload your CV/Resume here',
+    type: ParseCvDto,
   })
-  async upload(@UploadedFile() file) {
+  async upload(@UploadedFile() file: any) {
     try {
+      console.log('Uploaded file:', file);
       return await this.openaiService.parseCV(file);
     } catch (error) {
+      console.log('Error in parseCV controller:', error);
       throw new HttpException(
         error.message,
         error.status || HttpStatus.BAD_REQUEST,

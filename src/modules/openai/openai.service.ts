@@ -49,6 +49,9 @@ export class OpenaiService {
   ) {
     this.openai = new OpenAI({
       apiKey: this.configService.get('app.openai_secret'),
+      defaultHeaders: {
+        'OpenAI-Beta': 'assistants=v2',
+      },
     });
   }
 
@@ -595,24 +598,41 @@ export class OpenaiService {
    * @throws {HttpException} - Throws an HTTP exception in case of errors, with
    * the error message and status code appropriately set.
    */
-  async parseCV(file: Buffer): Promise<string> {
+  async parseCV(file: any): Promise<string> {
     try {
       console.time('Time in seconds to parse and normalize user resume');
 
       const fileBuffer = Buffer.from(file.buffer);
 
       // Create a file on OpenAI
-      const uploadedFile = await this.createOpenAIFile(fileBuffer);
+      const uploadedFile = await this.createOpenAIFile(file);
 
       // Retrieve assistant information from OpenAI
+      const assistantId = this.configService.get('app.openai_assistant_id');
+      if (!assistantId) {
+        throw new HttpException(
+          'OpenAI Assistant ID not configured. Please set OPEN_AI_ASSISTANT_ID in your environment variables.',
+          HttpStatus.INTERNAL_SERVER_ERROR
+        );
+      }
+
       const assistant = await this.openai.beta.assistants.retrieve(
-        'asst_zVuBcl71594b5ulGFJhmoHEJ',
+        assistantId,
+        {
+          headers: {
+            'OpenAI-Beta': 'assistants=v2'
+          }
+        }
       );
 
       console.log('Assistant Retrieved');
 
       // Create a new thread on OpenAI
-      const thread = await this.openai.beta.threads.create();
+      const thread = await this.openai.beta.threads.create({}, {
+        headers: {
+          'OpenAI-Beta': 'assistants=v2'
+        }
+      });
 
       console.log('Thread Retrieved');
 
@@ -624,6 +644,10 @@ export class OpenaiService {
       // Create a run on the thread
       const run = await this.openai.beta.threads.runs.create(thread.id, {
         assistant_id: assistant.id,
+      }, {
+        headers: {
+          'OpenAI-Beta': 'assistants=v2'
+        }
       });
 
       console.log('Steps Queued...');
@@ -632,7 +656,11 @@ export class OpenaiService {
       await this.waitForRunCompletion(thread.id, run.id);
 
       // Retrieve messages from the thread
-      const messages = await this.openai.beta.threads.messages.list(thread.id);
+      const messages = await this.openai.beta.threads.messages.list(thread.id, {
+        headers: {
+          'OpenAI-Beta': 'assistants=v2'
+        }
+      });
 
       console.log('Messages Retrieved');
 
@@ -663,7 +691,7 @@ export class OpenaiService {
   private async createOpenAIFile(file: any): Promise<any> {
     // Create an OpenAI file using the provided file buffer
     return await this.openai.files.create({
-      file: await toFile(file, file.originalname), // Use a meaningful name for the file
+      file: await toFile(file.buffer, file.originalname), // Use the buffer from the Multer file object
       purpose: 'assistants',
     });
   }
@@ -678,11 +706,19 @@ export class OpenaiService {
     threadId: string,
     fileId: string,
   ): Promise<any> {
-    // Create a message on the specified thread
+    // Create a message on the specified thread (v2 API format)
     return await this.openai.beta.threads.messages.create(threadId, {
       role: 'user',
       content: ResumeParserBasePrompt,
-      file_ids: [fileId],
+      // Using any type to bypass TypeScript compiler restrictions for v2 API
+      attachments: [{
+        file_id: fileId,
+        tools: [{ type: 'file_search' }]
+      }]
+    } as any, {
+      headers: {
+        'OpenAI-Beta': 'assistants=v2'
+      }
     });
   }
 
@@ -706,6 +742,11 @@ export class OpenaiService {
       const runStatus = await this.openai.beta.threads.runs.retrieve(
         threadId,
         runId,
+        {
+          headers: {
+            'OpenAI-Beta': 'assistants=v2'
+          }
+        }
       );
 
       console.log(
