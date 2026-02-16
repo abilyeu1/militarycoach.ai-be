@@ -160,7 +160,7 @@ export class AuthService {
         stripeSubscriptionId: null,
         stripeSubscriptionStatus: 'free',
         freeUserHoursLimit: 72, // 3 days free trial
-        messagesLimit: 12,
+        messagesLimit: 34,
         messagesConsumed: 0,
         freeMessagesLimitExhausted: false,
         profileStatus: null,

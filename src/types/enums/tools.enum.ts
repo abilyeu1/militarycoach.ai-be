@@ -5,6 +5,8 @@ export enum Tools {
   SKILLS_GAP_ANALYSIS = 'skills-gap-analysis',
   MOCK_INTERVIEW_PREP = 'mock-interview-prep',
   CV_BUILDER = 'cv-builder',
+  SALARY_NEGOTIATOR = 'salary-negotiator',
+  SKILLBRIDGE_WIZARD = 'skillbridge-wizard',
 }
 
 export enum OPENAI_ROLES {

@@ -23,6 +23,8 @@ import { IChat } from './interface/chat.type';
 import { ICoverLetterWizard } from './interface/coverLetterWizard.interface';
 import { IMockInterview } from './interface/mockInterview.interface';
 import { ISkillsGapAnalysis } from './interface/skillsGapAnalysis.interface';
+import { ISalaryNegotiator } from './interface/salaryNegotiator.interface';
+import { ISkillbridgeWizard } from './interface/skillbridgeWizard.interface';
 
 // Gateway Imports
 import { StreamGateway } from 'src/stream.gateway';
@@ -35,6 +37,12 @@ import { basePrompt_CLW } from 'src/base_prompts/coverLetterWizard';
 import { basePrompt_MI } from 'src/base_prompts/mockInterviewPrep';
 import { basePrompt_SGA } from 'src/base_prompts/skillsGapAnalysis';
 import { basePrompt_RI } from 'src/base_prompts/recommendIndustry';
+import { basePrompt_SN } from 'src/base_prompts/salaryNegotiator';
+import { basePrompt_SB } from 'src/base_prompts/skillbridgeWizard';
+import { getJson } from 'serpapi';
+
+// Markdown to HTML conversion
+import { marked } from 'marked';
 
 @Injectable()
 export class OpenaiService {
@@ -486,7 +494,11 @@ export class OpenaiService {
 
     await this.checkAndUpdateMessageLimit(userID);
 
-    const basePrompt = basePrompt_SGA(promptDetails);
+    // Build search queries and perform searches for better recommendations
+    const searchQueries = this.buildSkillsGapSearchQueries(promptDetails);
+    const searchResults = await this.performSkillsGapSearches(searchQueries);
+
+    const basePrompt = basePrompt_SGA(promptDetails, searchResults);
 
     // filter our role === system messages from the message array
     const filteredMessage = message.filter((msg) => msg.role !== 'system');
@@ -537,12 +549,451 @@ export class OpenaiService {
       userID,
     );
 
+    // Convert markdown to HTML
+    let cleanedContent = content.replace('undefined', '').trim();
+
+    // Strip markdown code block wrapper if present (e.g., ```markdown, ```mdx, etc.)
+    cleanedContent = cleanedContent
+      .replace(/^```(?:markdown|mdx)?\s*\n?/i, '')
+      .replace(/\n?```\s*$/i, '')
+      .trim();
+
+    // Split content and questions before HTML conversion (questions are after ##)
+    const parts = cleanedContent.split('##');
+    const mainContent = parts[0];
+    const questions = parts.slice(1);
+
+    // Convert only main content to HTML
+    const htmlContent = await marked.parse(mainContent);
+
+    // Reconstruct with ## markers so frontend can extract questions
+    const finalContent = htmlContent + (questions.length > 0 ? '##' + questions.join('##') : '');
+
     return {
-      content: content.replace('undefined', '').trim(),
+      content: finalContent,
       basePrompt,
       user,
     };
   }
+  // =================== 6. Salary Negotiator ======================
+  /**
+   * @description This endpoint processes a user profile and generates salary negotiation advice using OpenAI's chat completions.
+   * @param {string} chatID - The unique identifier for the chat.
+   * @param {string} userID - The unique identifier for the user.
+   * @param {ISalaryNegotiator} salaryNegotiatorData - The input data containing message and prompt details for salary negotiation.
+   * @returns {Promise<{content: string; basePrompt: string; user: IUser}>} A Promise that resolves to the salary negotiation response.
+   */
+  async salaryNegotiator(
+    chatID: string,
+    userID: string,
+    { message, promptDetails }: ISalaryNegotiator,
+  ): Promise<{ content: string; basePrompt: string; user: IUser }> {
+    // Function level variables
+    let content: string;
+
+    await this.checkAndUpdateMessageLimit(userID);
+
+    const basePrompt = basePrompt_SN(promptDetails);
+
+    // filter out role === system messages from the message array
+    const filteredMessage = message.filter((msg) => msg.role !== 'system');
+
+    try {
+      const stream = await this.openai.chat.completions.create({
+        model: process.env.OPEN_AI_MODEL as string,
+        messages: [
+          {
+            role: 'system',
+            content: basePrompt,
+          },
+          // @ts-ignore
+          ...filteredMessage,
+        ],
+        stream: true,
+        max_tokens: parseFloat(process.env.OPEN_AI_MAX_TOKENS),
+        temperature: parseFloat(process.env.OPEN_AI_TEMP),
+        top_p: 1,
+      });
+
+      for await (const chunk of stream) {
+        const responseContent = chunk.choices[0].delta.content as string;
+
+        if (
+          !responseContent ||
+          responseContent.toLowerCase().includes('undefined')
+        ) {
+          continue;
+        }
+
+        this.streamService.handleMessage(
+          userID,
+          responseContent,
+          chatID,
+          Tools.SALARY_NEGOTIATOR,
+        );
+
+        content += responseContent || '';
+      }
+    } catch (error) {
+      console.error(error);
+      throw error;
+    }
+
+    const { user } = await this.updateToolCountAndUserMessageCount(
+      Tools.SALARY_NEGOTIATOR,
+      userID,
+    );
+
+    // Convert markdown to HTML
+    let cleanedContent = content.replace('undefined', '').trim();
+
+    // Strip markdown code block wrapper if present (e.g., ```markdown, ```mdx, etc.)
+    cleanedContent = cleanedContent
+      .replace(/^```(?:markdown|mdx)?\s*\n?/i, '')
+      .replace(/\n?```\s*$/i, '')
+      .trim();
+
+    // Split content and questions before HTML conversion (questions are after ##)
+    const parts = cleanedContent.split('##');
+    const mainContent = parts[0];
+    const questions = parts.slice(1);
+
+    // Convert only main content to HTML
+    const htmlContent = await marked.parse(mainContent);
+
+    // Reconstruct with ## markers so frontend can extract questions
+    const finalContent = htmlContent + (questions.length > 0 ? '##' + questions.join('##') : '');
+
+    return {
+      content: finalContent,
+      basePrompt,
+      user,
+    };
+  }
+
+  // =================== 7. SkillBridge Wizard ======================
+  /**
+   * @description This endpoint searches for SkillBridge opportunities and provides recommendations using SerpAPI and OpenAI.
+   * @param {string} chatID - The unique identifier for the chat.
+   * @param {string} userID - The unique identifier for the user.
+   * @param {ISkillbridgeWizard} skillbridgeWizardData - The input data containing message and prompt details.
+   * @returns {Promise<{content: string; basePrompt: string; user: IUser}>} A Promise that resolves to the SkillBridge recommendations.
+   */
+  async skillbridgeWizard(
+    chatID: string,
+    userID: string,
+    { message, promptDetails }: ISkillbridgeWizard,
+  ): Promise<{ content: string; basePrompt: string; user: IUser }> {
+    // Function level variables
+    let content: string;
+
+    await this.checkAndUpdateMessageLimit(userID);
+
+    // Build search queries based on user's career preferences
+    const searchQueries = this.buildSkillBridgeSearchQueries(promptDetails);
+
+    // Perform searches using SerpAPI
+    const searchResults = await this.performSkillBridgeSearches(searchQueries);
+
+    const basePrompt = basePrompt_SB(promptDetails, searchResults);
+
+    // filter out role === system messages from the message array
+    const filteredMessage = message.filter((msg) => msg.role !== 'system');
+
+    try {
+      const stream = await this.openai.chat.completions.create({
+        model: process.env.OPEN_AI_MODEL as string,
+        messages: [
+          {
+            role: 'system',
+            content: basePrompt,
+          },
+          // @ts-ignore
+          ...filteredMessage,
+        ],
+        stream: true,
+        max_tokens: parseFloat(process.env.OPEN_AI_MAX_TOKENS),
+        temperature: parseFloat(process.env.OPEN_AI_TEMP),
+        top_p: 1,
+      });
+
+      for await (const chunk of stream) {
+        const responseContent = chunk.choices[0].delta.content as string;
+
+        if (
+          !responseContent ||
+          responseContent.toLowerCase().includes('undefined')
+        ) {
+          continue;
+        }
+
+        this.streamService.handleMessage(
+          userID,
+          responseContent,
+          chatID,
+          Tools.SKILLBRIDGE_WIZARD,
+        );
+
+        content += responseContent || '';
+      }
+    } catch (error) {
+      console.error(error);
+      throw error;
+    }
+
+    const { user } = await this.updateToolCountAndUserMessageCount(
+      Tools.SKILLBRIDGE_WIZARD,
+      userID,
+    );
+
+    // Convert markdown to HTML
+    let cleanedContent = content.replace('undefined', '').trim();
+
+    // Strip markdown code block wrapper if present
+    cleanedContent = cleanedContent
+      .replace(/^```(?:markdown|mdx)?\s*\n?/i, '')
+      .replace(/\n?```\s*$/i, '')
+      .trim();
+
+    // Split content and questions before HTML conversion
+    const parts = cleanedContent.split('##');
+    const mainContent = parts[0];
+    const questions = parts.slice(1);
+
+    // Convert only main content to HTML
+    const htmlContent = await marked.parse(mainContent);
+
+    // Reconstruct with ## markers so frontend can extract questions
+    const finalContent = htmlContent + (questions.length > 0 ? '##' + questions.join('##') : '');
+
+    return {
+      content: finalContent,
+      basePrompt,
+      user,
+    };
+  }
+
+  /**
+   * @description Builds search queries for DoD-approved SkillBridge opportunities
+   * Focuses on official skillbridge.osd.mil website for accuracy
+   */
+  private buildSkillBridgeSearchQueries(promptDetails: any): string[] {
+    const queries: string[] = [];
+    const { desiredCareerField1, desiredCareerField2, desiredLocation, careers } = promptDetails;
+
+    // PRIORITY: Official DoD SkillBridge website searches
+    queries.push('site:skillbridge.osd.mil approved programs');
+    queries.push('site:skillbridge.osd.mil locations employers');
+
+    // Search by desired career fields on official site
+    if (desiredCareerField1 && desiredCareerField1 !== 'Undecided/Any') {
+      queries.push(`site:skillbridge.osd.mil ${desiredCareerField1}`);
+      queries.push(`DoD approved SkillBridge ${desiredCareerField1} programs`);
+    }
+
+    if (desiredCareerField2 && desiredCareerField2 !== 'Undecided/Any') {
+      queries.push(`site:skillbridge.osd.mil ${desiredCareerField2}`);
+    }
+
+    // Location-specific search on official site
+    if (desiredLocation) {
+      queries.push(`site:skillbridge.osd.mil ${desiredLocation}`);
+      queries.push(`DoD SkillBridge approved programs ${desiredLocation}`);
+    }
+
+    // If no specific career field, search for programs matching their experience
+    if (!desiredCareerField1 || desiredCareerField1 === 'Undecided/Any') {
+      if (careers && careers.length > 0) {
+        const careerField = careers[0].careerField;
+        queries.push(`site:skillbridge.osd.mil ${careerField}`);
+      }
+      queries.push('site:skillbridge.osd.mil top employers partners');
+    }
+
+    // General DoD-approved program searches
+    queries.push('DoD SkillBridge approved employers list 2024 2025');
+
+    return queries.slice(0, 6); // Limit to 6 queries
+  }
+
+  /**
+   * @description Performs searches using SerpAPI and aggregates results
+   */
+  private async performSkillBridgeSearches(queries: string[]): Promise<string> {
+    const serpApiKey = this.configService.get('app.serpapi_key');
+
+    if (!serpApiKey) {
+      console.warn('SERPAPI_KEY not configured, returning default search guidance');
+      return this.getDefaultSkillBridgeInfo();
+    }
+
+    const allResults: any[] = [];
+
+    for (const query of queries) {
+      try {
+        const result = await getJson({
+          api_key: serpApiKey,
+          engine: 'google',
+          q: query,
+          num: 5,
+        });
+
+        if (result.organic_results) {
+          allResults.push(...result.organic_results.slice(0, 3));
+        }
+      } catch (error) {
+        console.error(`Search failed for query: ${query}`, error);
+      }
+    }
+
+    // Format search results for the prompt
+    if (allResults.length === 0) {
+      return this.getDefaultSkillBridgeInfo();
+    }
+
+    // Remove duplicates based on link
+    const uniqueResults = allResults.filter(
+      (result, index, self) =>
+        index === self.findIndex((r) => r.link === result.link)
+    );
+
+    let formattedResults = '**Search Results from DoD SkillBridge Website and Approved Sources:**\n\n';
+    formattedResults += '**REMINDER: Only recommend programs that are DoD-approved and listed on skillbridge.osd.mil**\n\n';
+
+    uniqueResults.slice(0, 15).forEach((result, index) => {
+      const isOfficialSite = result.link?.includes('skillbridge.osd.mil');
+      formattedResults += `${index + 1}. **${result.title || 'No title'}**${isOfficialSite ? ' [OFFICIAL DoD SITE]' : ''}\n`;
+      formattedResults += `   Link: ${result.link || 'No link'}\n`;
+      formattedResults += `   ${result.snippet || 'No description'}\n\n`;
+    });
+
+    formattedResults += '\n**Always direct users to verify programs at: https://skillbridge.osd.mil/locations.htm**\n';
+
+    return formattedResults;
+  }
+
+  /**
+   * @description Builds search queries for Skills Gap Analysis based on user's career goals
+   */
+  private buildSkillsGapSearchQueries(promptDetails: any): string[] {
+    const queries: string[] = [];
+    const { industryOfInterest, jobTitle, jobPositionLevel } = promptDetails;
+
+    // Search for certifications and training in the target industry
+    if (industryOfInterest && industryOfInterest !== 'Undecided/Any') {
+      queries.push(`best certifications for ${industryOfInterest} ${jobPositionLevel} 2024 2025`);
+      queries.push(`${industryOfInterest} skills training courses online`);
+    }
+
+    // Search for specific job title requirements
+    if (jobTitle) {
+      queries.push(`${jobTitle} required skills certifications 2024`);
+      queries.push(`how to become ${jobTitle} training courses`);
+      queries.push(`${jobTitle} bootcamp programs online`);
+    }
+
+    // Military-specific transition training
+    queries.push(`military veteran ${industryOfInterest || 'career'} transition training programs`);
+
+    // Popular learning platforms
+    if (jobTitle || industryOfInterest) {
+      queries.push(`Coursera LinkedIn Learning ${jobTitle || industryOfInterest} courses`);
+    }
+
+    // Free resources for veterans
+    queries.push(`free training certifications for military veterans ${industryOfInterest || ''}`);
+
+    return queries.slice(0, 5); // Limit to 5 queries
+  }
+
+  /**
+   * @description Performs searches for Skills Gap Analysis recommendations
+   */
+  private async performSkillsGapSearches(queries: string[]): Promise<string> {
+    const serpApiKey = this.configService.get('app.serpapi_key');
+
+    if (!serpApiKey) {
+      console.warn('SERPAPI_KEY not configured for Skills Gap Analysis');
+      return '';
+    }
+
+    const allResults: any[] = [];
+
+    for (const query of queries) {
+      try {
+        const result = await getJson({
+          api_key: serpApiKey,
+          engine: 'google',
+          q: query,
+          num: 5,
+        });
+
+        if (result.organic_results) {
+          allResults.push(...result.organic_results.slice(0, 3));
+        }
+      } catch (error) {
+        console.error(`Skills Gap search failed for query: ${query}`, error);
+      }
+    }
+
+    if (allResults.length === 0) {
+      return '';
+    }
+
+    // Remove duplicates based on link
+    const uniqueResults = allResults.filter(
+      (result, index, self) =>
+        index === self.findIndex((r) => r.link === result.link)
+    );
+
+    let formattedResults = '';
+    uniqueResults.slice(0, 12).forEach((result, index) => {
+      formattedResults += `${index + 1}. **${result.title || 'No title'}**\n`;
+      formattedResults += `   Link: ${result.link || 'No link'}\n`;
+      formattedResults += `   ${result.snippet || 'No description'}\n\n`;
+    });
+
+    return formattedResults;
+  }
+
+  /**
+   * @description Returns default SkillBridge information when search is unavailable
+   * Only includes DoD-approved programs and official resources
+   */
+  private getDefaultSkillBridgeInfo(): string {
+    return `
+**IMPORTANT: Only DoD-Approved SkillBridge Programs**
+
+The DoD SkillBridge program connects transitioning service members with **officially approved** industry partners for internships during their last 180 days of service. All programs must be verified on the official DoD SkillBridge website.
+
+**How to Find DoD-Approved Programs:**
+1. Visit the official SkillBridge website: https://skillbridge.osd.mil/
+2. Use the Program Locator: https://skillbridge.osd.mil/locations.htm
+3. Filter by industry, location, and program type
+4. All listed programs are DoD-approved
+
+**Examples of DoD-Approved SkillBridge Partners (verify current availability on skillbridge.osd.mil):**
+1. Amazon - Amazon Military Programs (Operations, IT, Management)
+2. Microsoft - Microsoft Software & Systems Academy (MSSA)
+3. Lockheed Martin - Various engineering and technical programs
+4. Boeing - Manufacturing, engineering, project management
+5. Salesforce - Salesforce Military / Vetforce
+6. Deloitte - CORE Leadership Program
+7. USAA - Various finance and IT roles
+8. Booz Allen Hamilton - Consulting and cybersecurity
+9. Hiring Our Heroes - Corporate Fellowship Program
+10. FourBlock - Career Readiness Program
+
+**Official DoD SkillBridge Resources:**
+- Main Website: https://skillbridge.osd.mil/
+- Program Locator: https://skillbridge.osd.mil/locations.htm
+- Program Overview: https://skillbridge.osd.mil/program-overview.htm
+- Employer Directory: https://skillbridge.osd.mil/locations.htm
+
+**IMPORTANT:** Always verify program availability and approval status directly on skillbridge.osd.mil before applying. Program availability changes frequently.
+`;
+  }
+
   // =================== Recommend Industry ======================
   /**
    * @description This endpoint takes in a user profile and returns normalized CV data using OPEN AI Assistant tool knowledge retrieval.

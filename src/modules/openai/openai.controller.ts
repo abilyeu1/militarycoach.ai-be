@@ -38,6 +38,8 @@ import { CareerWizardDTO } from './DTO/careerWizard.dto';
 import { CoverLetterWizardDTO } from './DTO/coverLetterWizard.dto';
 import { MockInterviewDTO } from './DTO/mockInterview.dto';
 import { SkillsGapAnalysisDTO } from './DTO/skillsGapAnalysis.dto';
+import { SalaryNegotiatorDTO } from './DTO/salaryNegotiator.dto';
+import { SkillbridgeWizardDTO } from './DTO/skillbridgeWizard.dto';
 import { ParseCvDto } from './DTO/parseCV.dto';
 
 @Controller('openai')
@@ -162,6 +164,54 @@ export class OpenaiController {
   ): Promise<{ content: string; basePrompt: string }> {
     const { user } = req;
     return await this.openaiService.skillsGapAnalysis(chatID, user.id, career);
+  }
+
+  // =================== POST: Salary Negotiator - Conversation ======================
+  /**
+   * @description This endpoint takes in a user profile and salary details and returns salary negotiation advice.
+   * @body {Salary Negotiator}
+   * @returns {Promise<string>} Returns salary negotiation response as a string.
+   */
+  @Post('/salary-negotiator/:chatID')
+  @UseGuards(JwtAuthGuard)
+  @UsePipes(ValidationPipe)
+  @ApiBearerAuth('jwt')
+  @ApiParam({
+    name: 'chatID',
+    type: String,
+    required: true,
+  })
+  async salaryNegotiator(
+    @Param() { chatID }: { chatID: string },
+    @Body() salaryData: SalaryNegotiatorDTO,
+    @Request() req: { user: UserDocument },
+  ): Promise<{ content: string; basePrompt: string }> {
+    const { user } = req;
+    return await this.openaiService.salaryNegotiator(chatID, user.id, salaryData);
+  }
+
+  // =================== POST: SkillBridge Wizard - Conversation ======================
+  /**
+   * @description This endpoint searches for SkillBridge opportunities and provides recommendations.
+   * @body {SkillBridge Wizard}
+   * @returns {Promise<string>} Returns SkillBridge recommendations as a string.
+   */
+  @Post('/skillbridge-wizard/:chatID')
+  @UseGuards(JwtAuthGuard)
+  @UsePipes(ValidationPipe)
+  @ApiBearerAuth('jwt')
+  @ApiParam({
+    name: 'chatID',
+    type: String,
+    required: true,
+  })
+  async skillbridgeWizard(
+    @Param() { chatID }: { chatID: string },
+    @Body() skillbridgeData: SkillbridgeWizardDTO,
+    @Request() req: { user: UserDocument },
+  ): Promise<{ content: string; basePrompt: string }> {
+    const { user } = req;
+    return await this.openaiService.skillbridgeWizard(chatID, user.id, skillbridgeData);
   }
 
   // =================== POST: Parse CV - File Upload ======================
